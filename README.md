@@ -1,64 +1,42 @@
 # ETL Project: Colombia & Sustainable Development Goals (SDG 4: Quality Education)
 
-## 1. Project Objective
-The primary business objective of this project is to analyze the shift in higher education funding in Colombia, specifically evaluating the "crowding-out" effect of recent government policy changes (transitioning from demand-side subsidies like *Generación E* to supply-side gratuity like *Matrícula Cero*). 
+## 1. Project Objective & Evaluation Criteria
+**Business Scenario:** Analyze the shift in higher education funding in Colombia, specifically evaluating the "crowding-out" effect caused by the transition from demand-side subsidies (*Generación E*) to supply-side gratuity (*Matrícula Cero*), and the subsequent defunding of the ICETEX credit system.
+* **SDG Target:** Goal 4 (Quality Education) - ensuring equal access for all women and men to affordable and quality technical, vocational and tertiary education.
+* **Analytical Question:** How has the implementation of *Matrícula Cero* and the 2025 ICETEX budget cuts displaced vulnerable students (Strata 1, 2, and 3) from the private higher education sector?
+* **Evaluation Criteria for Success:** The project is successful if the ETL pipeline accurately integrates over 100k raw cohort records into a dimensional model without data loss, allowing the BI tool to dynamically compute the Official/Private enrollment ratio variance (YoY) exclusively using server-side SQL processing.
 
-Using open government data from ICETEX ("Créditos Otorgados 2015-2025"), this production-grade ETL pipeline quantifies the variation in credit allocation between Official (Public) and Private institutions for vulnerable populations (Strata 1, 2, and 3).
-
-## 2. Grain Definition (Mandatory Requirement)
-**Grain:** One row in the fact table (`fact_credits`) represents the total count of new beneficiaries (`total_nuevos_beneficiarios`), aggregated by Academic Period, Geographic Origin, Demographic Profile, and Institutional Sector. 
-*Note: The raw dataset is pre-aggregated by cohorts, hence the grain is at the cohort level, not the individual student level.*
+## 2. Grain Definition (MANDATORY)
+**Grain:** One row in the fact table (`fact_credits`) represents the total aggregate count of new beneficiaries (`total_nuevos_beneficiarios`), defined by Academic Period, Geographic Origin, Demographic Profile, and Institutional Sector.
+*(Note: The raw source data is pre-aggregated by the government portal into statistical cohorts. Therefore, the architectural grain is cohort-level, not individual-student-level).*
 
 ## 3. Star Schema Design Decisions
-The dimensional model follows a Star Schema architecture optimized for OLAP queries in PostgreSQL:
+The dimensional model implements a Star Schema architecture optimized for OLAP operations in PostgreSQL.
 * **Fact Table:** `fact_credits` stores the core measure (`total_nuevos_beneficiarios`) and foreign keys.
 * **Dimensions:** * `dim_period`: Tracks academic terms and years.
   * `dim_geography`: Stores departmental and municipal categories.
   * `dim_program`: Classifies the academic level, credit modality, and the critical `sector_ies` (Official vs. Private).
   * `dim_student_profile`: Contains demographic data (`sexo_al_nacer`, `estrato_socioeconomico`).
-* **Design Decisions:**
-  1. **Surrogate Keys (SKs):** Implemented explicit auto-incrementing integer SKs (`sk_period`, `sk_geography`, etc.) to decouple the Data Warehouse from potential changes in ICETEX source IDs.
-  2. **Null Handling in Dimensions:** Missing values in the `SECTOR IES` column are mapped to a default 'NO CLASIFICADO' dimension member to preserve referential integrity without losing the measure counts.
+* **Design Decisions & Technical Debt Mitigation:**
+  1. **Surrogate Keys (SKs):** Implemented explicit auto-incrementing integer SKs (`sk_period`, `sk_geography`, etc.) generated during the Transform phase via Pandas. This decouples the Data Warehouse from unpredictable changes in government source IDs.
+  2. **Referential Integrity Constraints:** Strict primary-to-foreign key mapping is enforced at the database level.
+  3. **Null Handling in Dimensions:** Missing values in the `SECTOR IES` column are mapped to a default 'NO CLASIFICADO' dimension member to preserve referential integrity without losing measure counts.
+
+*(See Entity Relationship Diagram below)*
+![Star Schema Diagram](C:\Users\andre\Documents\Icetex\diagrams\star_schema.png)
 
 ## 4. Data Quality Assumptions & Profiling Log
-During the EDA phase, several data quality issues were identified and addressed in the transformation layer:
-* **Type Mismatch / Formatting:** The `VIGENCIA` (Year) column contained thousands separators (e.g., "2,015") and was loaded as a string. *Assumption:* This is a portal export artifact. *Fix:* Stripped commas and cast to `int64`.
-* **Missing Values:** 9,184 rows (8.54%) lacked `SECTOR IES` classification. *Fix:* Imputed with 'NO CLASIFICADO' to maintain the integrity of the total beneficiaries count.
+During the EDA phase (`notebooks/eda.ipynb`), the following quality issues were identified and addressed in the transformation layer:
+* **Type Mismatch / Formatting:** The `VIGENCIA` (Year) column contained thousands separators (e.g., "2,015") and was loaded as a string. *Fix:* Stripped commas and cast to `int64` via `pandas.Series.str.replace`.
+* **Missing Values:** 9,184 rows (8.54%) lacked `SECTOR IES` classification. *Fix:* Imputed with 'NO CLASIFICADO'.
 * **Categorical Noise:** Text columns presented trailing spaces and case inconsistencies. *Fix:* Standardized all strings using `.strip()` and `.upper()`.
-* **Statistical Distribution:** The measure column showed right-skewed distribution with outliers up to 668 beneficiaries per row. *Assumption:* These are valid mass-enrollment blocks typical of public sector reporting, not errors.
+* **Statistical Distribution & Outliers:** The measure column showed right-skewed distribution with values up to 668 beneficiaries per row. *Assumption:* These are valid mass-enrollment blocks typical of public sector reporting, not errors. They were preserved.
 
 ## 5. ETL Logic (Data Pipeline)
-1. **Extract:** Reads the raw CSV file (`Créditos_Otorgados._20260304.csv`) using Pandas.
-2. **Transform:** Applies data cleaning (comma removal, type casting), string standardization, null imputation, and generates the unique dimension DataFrames required for the Star Schema.
-3. **Load:** Connects to the PostgreSQL database, loads the Dimension tables first to generate Surrogate Keys, retrieves those SKs, maps them to the Fact table, and finally loads the Fact table ensuring strict referential integrity.
-
-
-
-## 7. BI Architecture & Server-Side Processing (Workshop 2.8)
-
-To comply with the requirement of generating reports exclusively from the Data Warehouse, the Power BI dashboard does not connect to the raw CSV nor does it import the entire Star Schema into memory.
-
-Instead, a specific **Data Mart view** (`vw_kpi_desplazamiento_matricula`) was created in PostgreSQL. Power BI connects directly to this view using the *Pushdown/Server-side processing* paradigm. This delegates the heavy computational load (JOINs and aggregations) to the database engine, ensuring an optimized, production-level BI architecture. All subsequent YoY (Year-over-Year) calculations and ratios are computed dynamically in memory using DAX measures.
-
-
-
-
-## 8. Business Insights: The "Crowding-Out" Effect & ICETEX Defunding (2018-2025)
-
-The ETL pipeline and subsequent data visualization successfully validate the hypothesis regarding the shift in higher education funding policies. The analysis is divided into two distinct political periods:
-
-### Phase 1: Demand-Side Subsidy Dominance (2018 - 2021)
-During the previous administration, characterized by programs like *Generación E*, the funding model heavily favored private institutions. 
-* **Market Composition:** The private sector captured **91%** of all ICETEX credit approvals for vulnerable strata, compared to just 9% for the official sector.
-* **Ratio:** The Official/Private ratio stood at **10%**, indicating that for every 10 students funded in a private university, only 1 was funded in a public one through this mechanism.
-
-### Phase 2: Supply-Side Transition and Sector Crisis (2022 - 2025)
-The introduction of the *Matrícula Cero* policy (direct funding to public institutions) was accompanied by severe structural budget cuts to ICETEX operations, triggering a massive displacement effect.
-* **The 2025 Budget Defunding:** The Colombian Comptroller General's Office confirmed a 33% budget reduction for ICETEX in 2025 (dropping from $1.2 trillion to $859 billion COP), which directly cut administered credit lines by 47%. 
-* **The Collapse in New Credits:** Institutional reports indicate that new credits plummeted by 80% (from 50,000 to roughly 10,000 in 2025). This perfectly correlates with our Data Mart visualization, which exposes a devastating **-89.77% YoY Net Variation** in the private sector for 2025.
-* **Subsidy Reductions:** The removal of interest rate subsidies severely affected active borrowers, causing monthly payment quotas for strata 1 and 2 to skyrocket by up to 93%.
-
-**Conclusion:** The data proves a definitive "crowding-out" effect. The government's policy shift and the subsequent defunding of ICETEX have effectively dismantled the financial mechanisms that allowed vulnerable populations (Strata 1, 2, and 3) to access private higher education, centralizing the demand almost exclusively within the capacity constraints of the official public sector.
+The pipeline is orchestrated via `main.py` ensuring a strict, idempotent execution sequence:
+1. **Extract:** Validates and ingests the raw CSV file (`Créditos_Otorgados._20260304.csv`) utilizing specific `dtype` mappings to prevent early floating-point errors.
+2. **Transform:** Executes cleaning algorithms, string standardization, handles missing values, dynamically extracts unique dimension tables, and generates sequential Surrogate Keys before performing `LEFT JOINS` to map SKs to the final Fact table.
+3. **Load:** Connects to PostgreSQL via `SQLAlchemy`. Applies a `TRUNCATE CASCADE` strategy for idempotency, then executes chunked bulk inserts (Dimensions first, Fact table last) to honor database referential constraints.
 
 ## 6. How to Run the Project
 1. Clone the repository and navigate to the root directory.
@@ -67,3 +45,28 @@ The introduction of the *Matrícula Cero* policy (direct funding to public insti
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    pip install -r requirements.txt
+3. Set up a local PostgreSQL instance. Create a database named icetex_ods_dw.
+4. Execute the schema creation script located at sql/create_tables.sql in your database.
+5. Update database credentials in src/load.py.
+6. Run the ETL Orchestrator:
+
+python main.py
+
+7. Generate the Data Mart view in PostgreSQL for BI consumption:
+CREATE OR REPLACE VIEW vw_kpi_desplazamiento_matricula AS
+SELECT dp.vigencia, dprog.sector_ies, dst.estrato_socioeconomico, SUM(fc.total_nuevos_beneficiarios) AS total_beneficiarios
+FROM fact_credits fc
+JOIN dim_period dp ON fc.sk_period = dp.sk_period
+JOIN dim_program dprog ON fc.sk_program = dprog.sk_program
+JOIN dim_student_profile dst ON fc.sk_student_profile = dst.sk_student_profile
+WHERE dst.estrato_socioeconomico IN (1, 2, 3) AND dprog.sector_ies != 'NO CLASIFICADO'
+GROUP BY dp.vigencia, dprog.sector_ies, dst.estrato_socioeconomico;
+
+## 7. Example Outputs & Visualizations
+
+The BI architecture implements Server-side Processing (Pushdown). Power BI does not import the CSV or the raw tables; it queries the optimized `vw_kpi_desplazamiento_matricula` Data Mart.
+
+### Business Insights: The "Crowding-Out" Effect & ICETEX Defunding
+
+* **Phase 1: Demand-Side Subsidy (2018 - 2021):** The private sector captured 91% of ICETEX approvals for vulnerable strata. The Official/Private ratio stood at 10% (1 public student for every 10 private students funded).
+* **Phase 2: Sector Crisis (2022 - 2025):** Accompanied by severe structural budget cuts to ICETEX operations (a 33% budget reduction confirmed for 2025), the private sector experienced a massive displacement effect. The pipeline calculates a devastating **-89.77% YoY Net Variation** in the private sector by 2025, completely centralizing demand within the public sector.
