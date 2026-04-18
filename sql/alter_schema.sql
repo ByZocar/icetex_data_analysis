@@ -23,7 +23,7 @@
 -- Después de la agregación anual en transform_and_merge.py, las columnas
 -- numéricas del API se promedian por (año × departamento).
 
-ALTER TABLE fact_credits
+
 -- ─── Columna de PIB Departamental ───────────────────────────────────────────
 -- Fuente: DANE vía Socrata
 -- Se incluye para el análisis de correlación con desplazamiento de matrícula.

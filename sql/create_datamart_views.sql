@@ -13,16 +13,14 @@
 --
 -- Métricas incluidas:
 --   • total_beneficiarios          — SUM(total_nuevos_beneficiarios)
---   • inflacion_promedio           — AVG(inflacion_anual)   [desde fact_credits]
---   • ipc_promedio                 — AVG(ipc_indice)        [desde fact_credits]
---   • pobreza_promedio             — AVG(pobreza_monetaria) [desde fact_credits]
+--   • pib_miles_millones_promedio  — AVG(pib_miles_millones)   [desde fact_credits]
 --   • variacion_yoy_pct            — % variación interanual via LAG (beneficiarios)
---   • variacion_yoy_inflacion_pct  — % variación interanual via LAG (inflación)
+--   • variacion_yoy_pib_pct        — % variación interanual via LAG (PIB)
 --   • participacion_sector_pct     — cuota de mercado del sector dentro del depto/año
 --   • variacion_cuota_pp           — cambio en puntos porcentuales vs año anterior
 --
 -- Dependencias:
---   fact_credits (con columnas macro: inflacion_anual, ipc_indice, pobreza_monetaria)
+--   fact_credits (con columna macro: pib_miles_millones)
 --   dim_period, dim_geography, dim_program, dim_student_profile
 --
 -- Prerequisito:
@@ -55,9 +53,7 @@ WITH base_agregada AS (
         -- ── Métricas macroeconómicas REALES (desde fact_credits) ──
         -- AVG es correcto porque el mismo valor macro se replica en cada fila
         -- del hecho para una combinación (año, departamento) dada.
-        AVG(fc.inflacion_anual)              AS inflacion_promedio,
-        AVG(fc.ipc_indice)                   AS ipc_promedio,
-        AVG(fc.pobreza_monetaria)            AS pobreza_promedio
+        AVG(fc.pib_miles_millones)              AS pib_miles_millones_promedio
 
     FROM fact_credits   fc
     JOIN dim_period          dp ON fc.sk_period          = dp.sk_period
@@ -67,7 +63,7 @@ WITH base_agregada AS (
 
     -- ── Filtro analítico: solo estratos objetivo ──
     WHERE sp.estrato_socioeconomico IN (1, 2, 3)
-      AND pr.sector_ies IN ('OFICIAL', 'PRIVADA')
+      AND pr.sector_ies IN ('OFICIAL', 'PRIVADO', 'PRIVADA')
 
     GROUP BY
         dp.vigencia,
@@ -99,9 +95,7 @@ enriquecida AS (
         ba.num_registros_fact,
 
         -- ── Métricas macroeconómicas directas ──
-        ROUND(ba.inflacion_promedio, 4)      AS inflacion_promedio,
-        ROUND(ba.ipc_promedio, 4)            AS ipc_promedio,
-        ROUND(ba.pobreza_promedio, 4)        AS pobreza_promedio,
+        ROUND(ba.pib_miles_millones_promedio, 4)      AS pib_miles_millones_promedio,
 
         -- ── Cuota de mercado del sector en el departamento ese año ──
         ROUND(
@@ -127,31 +121,24 @@ enriquecida AS (
             2
         ) AS variacion_yoy_pct,
 
-        -- ── Variación interanual (%) de inflación ──
+        -- ── Variación interanual (%) de PIB ──
         ROUND(
             (
-                ba.inflacion_promedio
-                - LAG(ba.inflacion_promedio) OVER w_depto_sector
+                ba.pib_miles_millones_promedio
+                - LAG(ba.pib_miles_millones_promedio) OVER w_depto_sector
             ) * 100.0
             / NULLIF(
-                LAG(ba.inflacion_promedio) OVER w_depto_sector,
+                LAG(ba.pib_miles_millones_promedio) OVER w_depto_sector,
                 0
               ),
             2
-        ) AS variacion_yoy_inflacion_pct,
+        ) AS variacion_yoy_pib_pct,
 
-        -- ── Variación interanual (%) de pobreza monetaria ──
+        -- ── KPI de Densidad de Crédito (Beneficiarios por cada Billón de PIB) ──
         ROUND(
-            (
-                ba.pobreza_promedio
-                - LAG(ba.pobreza_promedio) OVER w_depto_sector
-            ) * 100.0
-            / NULLIF(
-                LAG(ba.pobreza_promedio) OVER w_depto_sector,
-                0
-              ),
-            2
-        ) AS variacion_yoy_pobreza_pct,
+            ba.total_beneficiarios / NULLIF(ba.pib_miles_millones_promedio, 0),
+            4
+        ) AS densidad_credito_pib,
 
         -- ── Cuota del año anterior para ver tendencia ──
         LAG(
@@ -199,14 +186,12 @@ SELECT
     sector_ies,
     total_beneficiarios,
     num_registros_fact,
-    inflacion_promedio,
-    ipc_promedio,
-    pobreza_promedio,
+    pib_miles_millones_promedio,
     participacion_sector_pct,
     beneficiarios_anio_anterior,
     variacion_yoy_pct,
-    variacion_yoy_inflacion_pct,
-    variacion_yoy_pobreza_pct,
+    variacion_yoy_pib_pct,
+    densidad_credito_pib,
     participacion_anterior_pct,
     variacion_cuota_pp,
     rank_depto_por_sector
@@ -233,9 +218,9 @@ CREATE INDEX idx_mv_impacto_sector
 CREATE INDEX idx_mv_impacto_yoy
     ON mv_impacto_macro_desplazamiento (variacion_yoy_pct);
 
--- Índice compuesto para scatter plots (inflación vs caída de créditos)
-CREATE INDEX idx_mv_impacto_inflacion_yoy
-    ON mv_impacto_macro_desplazamiento (inflacion_promedio, variacion_yoy_pct);
+-- Índice compuesto para scatter plots (PIB vs caída de créditos)
+CREATE INDEX idx_mv_impacto_pib_yoy
+    ON mv_impacto_macro_desplazamiento (pib_miles_millones_promedio, variacion_yoy_pct);
 
 -- =============================================================================
 -- REFRESH: Ejecutar desde Airflow después de cada carga exitosa

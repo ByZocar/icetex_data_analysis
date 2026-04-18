@@ -448,11 +448,11 @@ def _load_fact_credits(
         INSERT INTO fact_credits
             (sk_period, sk_geography, sk_program, sk_student_profile,
              rango_valor_desembolsado, total_nuevos_beneficiarios,
-             inflacion_anual, ipc_indice, pobreza_monetaria)
+             pib_miles_millones)
         VALUES
             (:sk_period, :sk_geography, :sk_program, :sk_student_profile,
              :rango_valor_desembolsado, :total_nuevos_beneficiarios,
-             :inflacion_anual, :ipc_indice, :pobreza_monetaria)
+             :pib_miles_millones)
     """)
 
     total_rows = len(fact_df)
