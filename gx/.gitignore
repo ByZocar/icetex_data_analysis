@@ -1,6 +1,2 @@
-# Great Expectations — what NOT to commit
-# ----------------------------------------
-# Generated at runtime; contain run-specific data and local paths.
-# Commit only: expectations/, checkpoints/, great_expectations.yml
 
 uncommitted/

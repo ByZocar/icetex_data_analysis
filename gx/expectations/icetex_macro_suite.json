@@ -5,7 +5,7 @@
     {
       "expectation_type": "expect_column_values_to_not_be_null",
       "kwargs": {
-        "column": "vigencia"
+        "column": "VIGENCIA"
       },
       "meta": {
         "category": "integrity",
@@ -16,7 +16,7 @@
     {
       "expectation_type": "expect_column_values_to_not_be_null",
       "kwargs": {
-        "column": "codigo_departamento"
+        "column": "C\u00d3DIGO DEDEPARTAMENTO DE ORIGEN"
       },
       "meta": {
         "category": "integrity",
@@ -27,11 +27,12 @@
     {
       "expectation_type": "expect_column_values_to_be_in_set",
       "kwargs": {
-        "column": "sector_ies",
+        "column": "SECTOR IES",
         "mostly": 1.0,
         "value_set": [
           "OFICIAL",
           "PRIVADA",
+          "PRIVADO",
           "NO CLASIFICADO"
         ]
       },
@@ -39,6 +40,7 @@
         "approved_values": [
           "OFICIAL",
           "PRIVADA",
+          "PRIVADO",
           "NO CLASIFICADO"
         ],
         "category": "domain",
@@ -48,12 +50,15 @@
     {
       "expectation_type": "expect_column_values_to_be_in_set",
       "kwargs": {
-        "column": "estrato_socioeconomico",
+        "column": "ESTRATO SOCIOECON\u00d3MICO",
         "mostly": 0.95,
         "value_set": [
           1,
           2,
-          3
+          3,
+          4,
+          5,
+          6
         ]
       },
       "meta": {
@@ -65,7 +70,7 @@
     {
       "expectation_type": "expect_column_values_to_be_between",
       "kwargs": {
-        "column": "total_nuevos_beneficiarios",
+        "column": "N\u00daMERO DE NUEVOS BENEFICIARIOS DE CR\u00c9DITO",
         "max_value": null,
         "min_value": 0,
         "mostly": 1.0

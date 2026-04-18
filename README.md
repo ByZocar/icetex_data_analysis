@@ -1,72 +1,123 @@
-# ETL Project: Colombia & Sustainable Development Goals (SDG 4: Quality Education)
+# ICETEX ETL Pipeline & Analytical Data Mart (Second Delivery)
 
-## 1. Project Objective & Evaluation Criteria
-**Business Scenario:** Analyze the shift in higher education funding in Colombia, specifically evaluating the "crowding-out" effect caused by the transition from demand-side subsidies (*Generación E*) to supply-side gratuity (*Matrícula Cero*), and the subsequent defunding of the ICETEX credit system.
-* **SDG Target:** Goal 4 (Quality Education) - ensuring equal access for all women and men to affordable and quality technical, vocational and tertiary education.
-* **Analytical Question:** How has the implementation of *Matrícula Cero* and the 2025 ICETEX budget cuts displaced vulnerable students (Strata 1, 2, and 3) from the private higher education sector?
-* **Evaluation Criteria for Success:** The project is successful if the ETL pipeline accurately integrates over 100k raw cohort records into a dimensional model without data loss, allowing the BI tool to dynamically compute the Official/Private enrollment ratio variance (YoY) exclusively using server-side SQL processing.
+Este repositorio contiene la evolución de la infraestructura de datos analíticos para la asignación de créditos del ICETEX, transformando una canalización manual estática (Primera Entrega) en un **Pipeline ETL Automatizado mediante Apache Airflow**, integrado con una API pública y validado estrictamente en calidad mediante **Great Expectations**.
 
-## 2. Grain Definition (MANDATORY)
-**Grain:** One row in the fact table (`fact_credits`) represents the total aggregate count of new beneficiaries (`total_nuevos_beneficiarios`), defined by Academic Period, Geographic Origin, Demographic Profile, and Institutional Sector.
-*(Note: The raw source data is pre-aggregated by the government portal into statistical cohorts. Therefore, the architectural grain is cohort-level, not individual-student-level).*
+---
 
-## 3. Star Schema Design Decisions
-The dimensional model implements a Star Schema architecture optimized for OLAP operations in PostgreSQL.
-* **Fact Table:** `fact_credits` stores the core measure (`total_nuevos_beneficiarios`) and foreign keys.
-* **Dimensions:** * `dim_period`: Tracks academic terms and years.
-  * `dim_geography`: Stores departmental and municipal categories.
-  * `dim_program`: Classifies the academic level, credit modality, and the critical `sector_ies` (Official vs. Private).
-  * `dim_student_profile`: Contains demographic data (`sexo_al_nacer`, `estrato_socioeconomico`).
-* **Design Decisions & Technical Debt Mitigation:**
-  1. **Surrogate Keys (SKs):** Implemented explicit auto-incrementing integer SKs (`sk_period`, `sk_geography`, etc.) generated during the Transform phase via Pandas. This decouples the Data Warehouse from unpredictable changes in government source IDs.
-  2. **Referential Integrity Constraints:** Strict primary-to-foreign key mapping is enforced at the database level.
-  3. **Null Handling in Dimensions:** Missing values in the `SECTOR IES` column are mapped to a default 'NO CLASIFICADO' dimension member to preserve referential integrity without losing measure counts.
+## 1. Objetivos Refinados
 
-*(See Entity Relationship Diagram below)*
-![Star Schema Diagram](C:\Users\andre\Documents\Icetex\diagrams\star_schema.png)
+**¿Por qué estamos construyendo este pipeline?**
+El propósito inicial era comprender la distribución demográfica de los créditos educativos. Ahora, el objetivo refinado es **integrar el contexto macroeconómico regional** para determinar si existen efectos de "desplazamiento" socioeconómico en la asignación de recursos o correlacionar la demanda de educación superior estructurada con la fortaleza del Producto Interno Bruto (PIB) de cada región.
 
-## 4. Data Quality Assumptions & Profiling Log
-During the EDA phase (`notebooks/eda.ipynb`), the following quality issues were identified and addressed in the transformation layer:
-* **Type Mismatch / Formatting:** The `VIGENCIA` (Year) column contained thousands separators (e.g., "2,015") and was loaded as a string. *Fix:* Stripped commas and cast to `int64` via `pandas.Series.str.replace`.
-* **Missing Values:** 9,184 rows (8.54%) lacked `SECTOR IES` classification. *Fix:* Imputed with 'NO CLASIFICADO'.
-* **Categorical Noise:** Text columns presented trailing spaces and case inconsistencies. *Fix:* Standardized all strings using `.strip()` and `.upper()`.
-* **Statistical Distribution & Outliers:** The measure column showed right-skewed distribution with values up to 668 beneficiaries per row. *Assumption:* These are valid mass-enrollment blocks typical of public sector reporting, not errors. They were preserved.
+**¿Qué insights debe entregar la data?**
+- Identificar la variación YoY (Year-Over-Year) del volumen de beneficiarios cruzados transversalmente contra los cambios en el PIB regional.
+- Medir la cuota de penetración sectorial (Universidad Pública vs. Privada) según el músculo económico del territorio.
 
-## 5. ETL Logic (Data Pipeline)
-The pipeline is orchestrated via `main.py` ensuring a strict, idempotent execution sequence:
-1. **Extract:** Validates and ingests the raw CSV file (`Créditos_Otorgados._20260304.csv`) utilizing specific `dtype` mappings to prevent early floating-point errors.
-2. **Transform:** Executes cleaning algorithms, string standardization, handles missing values, dynamically extracts unique dimension tables, and generates sequential Surrogate Keys before performing `LEFT JOINS` to map SKs to the final Fact table.
-3. **Load:** Connects to PostgreSQL via `SQLAlchemy`. Applies a `TRUNCATE CASCADE` strategy for idempotency, then executes chunked bulk inserts (Dimensions first, Fact table last) to honor database referential constraints.
+---
 
-## 6. How to Run the Project
-1. Clone the repository and navigate to the root directory.
-2. Create a virtual environment and install dependencies:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-3. Set up a local PostgreSQL instance. Create a database named icetex_ods_dw.
-4. Execute the schema creation script located at sql/create_tables.sql in your database.
-5. Update database credentials in src/load.py.
-6. Run the ETL Orchestrator:
+## 2. API Externa y Estrategia de Data Profiling
 
-python main.py
+### Fuente Primaria (Primera Entrega)
+- **Data**: Archivo histórico plano de Nuevos Beneficiarios del ICETEX.
+- **Profiling Inicial**: Contenía inconsistencias semánticas en nombres de ciudades y falta de un esquema de integridad referencial duro. Las columnas esenciales (`VIGENCIA`, `DEPARTAMENTO`, `SECTOR`, `ESTRATO`) presentaban una forma en su mayoría estable pero carente de dimensionalidad.
 
-7. Generate the Data Mart view in PostgreSQL for BI consumption:
-CREATE OR REPLACE VIEW vw_kpi_desplazamiento_matricula AS
-SELECT dp.vigencia, dprog.sector_ies, dst.estrato_socioeconomico, SUM(fc.total_nuevos_beneficiarios) AS total_beneficiarios
-FROM fact_credits fc
-JOIN dim_period dp ON fc.sk_period = dp.sk_period
-JOIN dim_program dprog ON fc.sk_program = dprog.sk_program
-JOIN dim_student_profile dst ON fc.sk_student_profile = dst.sk_student_profile
-WHERE dst.estrato_socioeconomico IN (1, 2, 3) AND dprog.sector_ies != 'NO CLASIFICADO'
-GROUP BY dp.vigencia, dprog.sector_ies, dst.estrato_socioeconomico;
+### Nueva Fuente API (Segunda Entrega)
+- **API Seleccionada**: API pública de Socrata proveída por Datos Abiertos - Colombia (`kgyi-qc7j`).
+- **Data Extraída**: Producto Interno Bruto (PIB) Departamental, proyectado y calculado anualmente por el DANE.
+- **¿Por qué fue elegida?**: Añade un enorme valor analítico. Otorgar dinero es dependiente del contexto económico territorial. El PIB mide la salud financiera, otorgando a los tomadores de decisiones del ICETEX una visión sobre correlaciones en morosidad, dependencia de subsidios estatales o crecimiento.
 
-## 7. Example Outputs & Visualizations
+### Estrategia de Integración
+Teníamos dos opciones: cruzar por códigos DIVIPOLA o por nombres en texto.
+Dado que la fuente primaria no garantizaba coherencia de DIVIPOLA, nuestra estrategia de integración utiliza **Lógica de Matching Difuso (Fuzzy String Matching con `RapidFuzz`)**. 
+Los nombres geográficos son extraídos, normalizados (removiendo acentos y pasando a mayúsculas) y luego emparejados matemáticamente (ej. "BOGOTÁ, D.C." frente a "BOGOTA"). Esto asegura una robusta alineación topológica sin pérdida accidental de records. Los parámetros macroeconómicos se incrustan como Dimensiones Degeneradas en la Tabla de Hechos.
 
-The BI architecture implements Server-side Processing (Pushdown). Power BI does not import the CSV or the raw tables; it queries the optimized `vw_kpi_desplazamiento_matricula` Data Mart.
+---
 
-### Business Insights: The "Crowding-Out" Effect & ICETEX Defunding
+## 3. Dimensional Model (Modelo de Estrella)
 
-* **Phase 1: Demand-Side Subsidy (2018 - 2021):** The private sector captured 91% of ICETEX approvals for vulnerable strata. The Official/Private ratio stood at 10% (1 public student for every 10 private students funded).
-* **Phase 2: Sector Crisis (2022 - 2025):** Accompanied by severe structural budget cuts to ICETEX operations (a 33% budget reduction confirmed for 2025), the private sector experienced a massive displacement effect. The pipeline calculates a devastating **-89.77% YoY Net Variation** in the private sector by 2025, completely centralizing demand within the public sector.
+La estructura conserva el *Grain* de la primera entrega pero redefine sus alcances ante los nuevos parámetros.
+- **Grain del modelo**: Un único registro (fila) resume el agregado total de nuevos beneficiarios para la amalgama de un Año, un Departamento y Municipio, un Nivel/Sector, Modalidad crediticia y variables sociodemográficas, enriquecido lateralmente con la variable del PIB del respectivo cruce espacio-temporal.
+
+```mermaid
+erDiagram
+    fact_credits {
+        int sk_period FK
+        int sk_geography FK
+        int sk_program FK
+        int sk_student_profile FK
+        string modalidad_credito
+        string linea_credito
+        int total_nuevos_beneficiarios
+        decimal pib_miles_millones "Extraído por Socrata API (Macro)"
+    }
+    dim_period {
+        int sk_period PK
+        int vigencia
+    }
+    dim_geography {
+        int sk_geography PK
+        int codigo_departamento
+        string departamento
+        int codigo_municipio
+        string municipio
+    }
+    dim_program {
+        int sk_program PK
+        string nivel_formacion
+        string sector_ies
+    }
+    dim_student_profile {
+        int sk_student_profile PK
+        string sexo
+        int estrato
+    }
+
+    fact_credits }o--|| dim_period : "Ocurre en"
+    fact_credits }o--|| dim_geography : "Pertenece a"
+    fact_credits }o--|| dim_program : "Estudia en"
+    fact_credits }o--|| dim_student_profile : "Perfilado como"
+```
+
+> **Nota de Impacto de la API**: A diferencia de modelos ortodoxos, incrustar la información macro directamente en la `fact_credits` elimina múltiples sub-tablas de medidas estáticas, reduciendo los joins por año y mejorando la tasa de ingesta.
+
+---
+
+## 4. Pipeline Orchestration (Apache Airflow DAG)
+
+Todo el flujo de vida del dato está altamente automatizado:
+1. `extract_icetex_csv` y `extract_macro_api`: Operaciones I/O Bound montadas en paralelo. La extracción de API implementa una paginación inteligente utilizando un límite optimizado.
+2. `transform_and_merge`: Une amabas bases utilizando el cruce difuso, depura las incongruencias de formato, y elimina anomalías mediante un llenado analítico (Soft-fail en lugar de Hard Drop si una región carece temporalmente de dato del PIB).
+3. `run_quality_checks`: Tarea encargada de la inútil contaminación cruzada del modelo utilizando compuertas de seguridad con las librerías construidas bajo Test-Driven Development (TDD).
+4. `load_to_postgres`: Carga masiva aplicando inserciones optimizadas (`INSERT ON CONFLICT DO NOTHING`) sobre PostgreSQL.
+
+---
+
+## 5. Estrategia de Validación de Datos (Great Expectations)
+
+Para que el modelo sea productivo, el paso por el **Data Quality Gate** es obligatorio. Las validaciones ocurren estricta y únicamente **DESPUÉS** de la transformación y **ANTES** de la carga en base de datos.
+Todo este *Suite* (`setup_gx.py` & `validate_data.py`) determina la fiabilidad y salud vital del Data Warehouse. Ante el fallo de solo 1 parámetro crítico, Airflow suspende y marca la tarea como `FAILED`, impidiendo la inyección del dato sucio.
+
+### Reglas de Expectación Implementadas:
+| Regla | Tipo/Críticidad | Justificación |
+|---|---|---|
+| `expect_column_values_to_not_be_null` (Año) | **Crítico** | Previene fallos fatales de asignación temporal (integridad referencial en llaves foráneas para `dim_period`). |
+| `expect_column_values_to_not_be_null` (Depto) | **Crítico** | Protege y sustenta tanto el análisis espacial como la correcta absorción contra `dim_geography`. |
+| `expect_column_values_to_be_in_set` (Sector) | **Crítico** | Evita bifurcaciones lógicas restringiendo el sub-dominio obligatoriamente a: `OFICIAL`, `PRIVADO`, `NO CLASIFICADO`. |
+| `expect_column_values_to_be_in_set` (Estrato) | Tolerante (95%) | Garantiza el enfoque analítico en el grupo social delimitado (Estratos 1 a 6) ignorando el ruido excesivo. |
+| `expect_table_row_count_to_be_between` (Volume) | Alerta | Comprueba que luego del Join en memoria existan más de 50.000 filas (evita vacíos) y menos de 150.000 (previene fallos de cruce cartesiano perjudiciales en la base). |
+
+---
+
+## 6. Suposiciones (Assumptions) y Tratamiento Especial 
+
+- **MacroData Incompleta**: Es posible que no existan datos de Producto Interno Bruto para todas las locaciones micro representadas por el ICETEX. El sistema está diseñado para mapearlo limpiamente a valores `NULL`, sin alterar ni eliminar la valiosidad del crédito estudiantil propio.
+- **Idempotencia Absoluta**: Correr el pipeline 1 vez o 10.000 veces arrojará los mismos resultados estructurales (sin registros repetidos) gracias a la lógica interna del script de migración SQL dentro del DAG.
+- **Modificaciones GX**: Dada la profunda deprecación en el ecosistema 1.0 de GX, el proyecto congeló controladamente los paquetes Python (`0.18.x`) previniendo drift de contexto entre ramas productivas y repositorios locales.
+
+---
+
+## 7. Dashboards, Vistas Materializadas y Analítica 
+
+Una vez ingresados los datos, una vista super indexada llamada `mv_impacto_macro_desplazamiento` es recreada mediante Airflow. Encapsula en sí misma Funciones de Ventana (*Window Functions*) puras en PostgreSQL para deducir la métrica interanual sin exigir cómputo masivo al motor de Inteligencia de Negocios.
+
+*(Nota: Pantallazos pendientes de agregar una vez construidas y validadas las visualizaciones analíticas finales en la conexión en directo de Tableau/Power BI).*

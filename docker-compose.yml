@@ -1,0 +1,173 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.yml — ICETEX ETL Infrastructure
+#
+# Services:
+#   postgres-airflow  Internal Airflow metadata DB (not the DW)
+#   postgres-dw       The ICETEX Data Warehouse (icetex_ods_dw)
+#   airflow-init      One-shot DB migration + admin user creation
+#   airflow-webserver Airflow UI → http://localhost:8080  (admin / admin)
+#   airflow-scheduler Airflow task scheduler (LocalExecutor — no Redis needed)
+#
+# First run:
+#   cp .env.example .env          # fill in secrets
+#   docker compose up airflow-init
+#   docker compose up -d
+#
+# Shutdown (keep volumes):  docker compose down
+# Full wipe (delete data):  docker compose down -v
+# ─────────────────────────────────────────────────────────────────────────────
+version: '3.8'
+
+# ── Shared Airflow config block (YAML anchor) ─────────────────────────────────
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    # ── Executor & metadata DB ──────────────────────────────────────────────
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+      postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+
+    # ── Security ────────────────────────────────────────────────────────────
+    # Generate a new key: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-Tbe3UHl8M5B7FgRGlVhkdLZ0bXJqnKe4xYc9PmQoWs0=}
+    AIRFLOW__CORE__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-icetex-secret-change-in-production}
+
+    # ── Behaviour ───────────────────────────────────────────────────────────
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG: '1'
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+
+    # ── Python path: makes `from src.xxx import ...` work in DAG tasks ──────
+    PYTHONPATH: /opt/airflow
+
+    # ── Project-specific secrets (set in .env) ──────────────────────────────
+    ICETEX_DW_URI: >-
+      postgresql+psycopg2://icetex:${ICETEX_DW_PASSWORD:-icetex}@postgres-dw:5432/icetex_ods_dw
+    SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
+    SOCRATA_DATASET_ID: ${SOCRATA_DATASET_ID:-kgyi-qc7j}
+
+  volumes:
+    - ./dags:/opt/airflow/dags          # DAG definitions
+    - ./src:/opt/airflow/src            # ETL source modules
+    - ./gx:/opt/airflow/gx             # Great Expectations suite
+    - ./data:/opt/airflow/data          # Raw source files (CSV)
+    - airflow-logs:/opt/airflow/logs
+    - /tmp:/tmp                         # Shared inter-task Parquet staging area
+
+  depends_on:
+    postgres-airflow:
+      condition: service_healthy
+  user: "${AIRFLOW_UID:-50000}:0"
+  restart: unless-stopped
+
+
+# ── Services ─────────────────────────────────────────────────────────────────
+services:
+
+  # ── Airflow metadata database ─────────────────────────────────────────────
+  postgres-airflow:
+    image: postgres:15-alpine
+    container_name: icetex-postgres-airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-airflow-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow", "-d", "airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── ICETEX Data Warehouse ─────────────────────────────────────────────────
+  postgres-dw:
+    image: postgres:15-alpine
+    container_name: icetex-postgres-dw
+    environment:
+      POSTGRES_USER: icetex
+      POSTGRES_PASSWORD: ${ICETEX_DW_PASSWORD:-icetex}
+      POSTGRES_DB: icetex_ods_dw
+    volumes:
+      - postgres-dw-data:/var/lib/postgresql/data
+      # Auto-execute DDL on first container start (idempotent — uses IF NOT EXISTS)
+      - ./sql/create_tables.sql:/docker-entrypoint-initdb.d/01_create_tables.sql
+    ports:
+      # Exposed on 5433 to avoid conflict with a local PostgreSQL instance on 5432
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "icetex", "-d", "icetex_ods_dw"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── One-shot initialisation (runs once, then exits) ───────────────────────
+  airflow-init:
+    <<: *airflow-common
+    container_name: icetex-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -e
+        echo "Waiting for metadata DB..."
+        airflow db upgrade
+        echo "Creating admin user (idempotent)..."
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname ICETEX \
+          --role Admin \
+          --email admin@icetex.gov.co \
+          --password admin \
+          || true
+        echo "Airflow initialisation complete."
+    restart: on-failure
+    depends_on:
+      postgres-airflow:
+        condition: service_healthy
+
+  # ── Airflow Web UI ────────────────────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: icetex-airflow-webserver
+    command: webserver
+    ports:
+      # Host port 8081 to avoid conflict with other Airflow instances on 8080
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ── Airflow Scheduler ─────────────────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: icetex-airflow-scheduler
+    command: scheduler
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  postgres-airflow-data:
+  postgres-dw-data:
+  airflow-logs:
