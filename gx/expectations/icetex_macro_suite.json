@@ -1,0 +1,96 @@
+{
+  "data_asset_type": null,
+  "expectation_suite_name": "icetex_macro_suite",
+  "expectations": [
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "vigencia"
+      },
+      "meta": {
+        "category": "integrity",
+        "impact": "CRITICAL \u2014 null vigencia breaks dim_period FK resolution",
+        "rule": "vigencia_join_key"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "codigo_departamento"
+      },
+      "meta": {
+        "category": "integrity",
+        "impact": "CRITICAL \u2014 null dept code breaks dim_geography SK lookup",
+        "rule": "codigo_departamento_join_key"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "sector_ies",
+        "mostly": 1.0,
+        "value_set": [
+          "OFICIAL",
+          "PRIVADA",
+          "NO CLASIFICADO"
+        ]
+      },
+      "meta": {
+        "approved_values": [
+          "OFICIAL",
+          "PRIVADA",
+          "NO CLASIFICADO"
+        ],
+        "category": "domain",
+        "rule": "sector_ies_allowed_values"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "estrato_socioeconomico",
+        "mostly": 0.95,
+        "value_set": [
+          1,
+          2,
+          3
+        ]
+      },
+      "meta": {
+        "category": "domain",
+        "note": "Analysis targets strata 1\u20133; strata 4\u20136 are valid but out-of-scope",
+        "rule": "estrato_target_population"
+      }
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_between",
+      "kwargs": {
+        "column": "total_nuevos_beneficiarios",
+        "max_value": null,
+        "min_value": 0,
+        "mostly": 1.0
+      },
+      "meta": {
+        "category": "measure",
+        "impact": "A negative value indicates a data-entry error in the source",
+        "rule": "non_negative_beneficiaries"
+      }
+    },
+    {
+      "expectation_type": "expect_table_row_count_to_be_between",
+      "kwargs": {
+        "max_value": 150000,
+        "min_value": 50000
+      },
+      "meta": {
+        "category": "volume",
+        "note": "< 50,000 rows \u2192 broken JOIN or missing source file. > 150,000 rows \u2192 unintended cross-join.",
+        "rule": "row_count_sanity_check"
+      }
+    }
+  ],
+  "ge_cloud_id": null,
+  "meta": {
+    "great_expectations_version": "0.18.22"
+  }
+}

@@ -1,0 +1,29 @@
+name: icetex_macro_checkpoint
+config_version: 1.0
+template_name:
+module_name: great_expectations.checkpoint
+class_name: Checkpoint
+run_name_template: '%Y%m%d_%H%M%S-icetex-validation'
+expectation_suite_name:
+batch_request: {}
+action_list:
+  - name: store_validation_result
+    action:
+      class_name: StoreValidationResultAction
+  - name: update_data_docs
+    action:
+      class_name: UpdateDataDocsAction
+      site_names:
+        - local_site
+evaluation_parameters: {}
+runtime_configuration: {}
+validations:
+  - batch_request:
+      datasource_name: parquet_datasource
+      data_asset_name: merged_parquet_asset
+      options: {}
+      batch_slice:
+    expectation_suite_name: icetex_macro_suite
+profilers: []
+ge_cloud_id:
+expectation_suite_ge_cloud_id:
