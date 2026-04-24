@@ -17,14 +17,25 @@ El propósito inicial era comprender la distribución demográfica de los crédi
 
 ## 2. API Externa y Estrategia de Data Profiling
 
-### Fuente Primaria (Primera Entrega)
-- **Data**: Archivo histórico plano de Nuevos Beneficiarios del ICETEX.
-- **Profiling Inicial**: Contenía inconsistencias semánticas en nombres de ciudades y falta de un esquema de integridad referencial duro. Las columnas esenciales (`VIGENCIA`, `DEPARTAMENTO`, `SECTOR`, `ESTRATO`) presentaban una forma en su mayoría estable pero carente de dimensionalidad.
+### Fuente Primaria — ICETEX (CSV)
+- **Archivo**: Nuevos Beneficiarios de Crédito ICETEX.
+- **Filas**: 107,534 registros.
+- **Columnas**: 11 atributos (`VIGENCIA`, `CÓDIGO DEDEPARTAMENTO DE ORIGEN`, `DEPARTAMENTO DE ORIGEN`, `CÓDIGO DE MUNICIPIO`, `MUNICIPIO DE ORIGEN`, `NIVEL DE FORMACIÓN`, `SECTOR IES`, `SEXO AL NACER`, `ESTRATO SOCIOECONÓMICO`, `NÚMERO DE NUEVOS BENEFICIARIOS DE CRÉDITO`, `RANGO VALOR DE DESEMBOLSO`).
+- **Cobertura temporal**: 2015–2025 (11 años).
+- **Valores únicos clave**: 33 departamentos, 3 sectores IES, 6 estratos.
+- **Nulos en join keys**: 0% en `VIGENCIA`, 0% en `CÓDIGO DEDEPARTAMENTO DE ORIGEN`.
+- **Problemas detectados**: inconsistencias semánticas en nombres geográficos ("BOGOTA" vs formas con tildes), formato de miles en vigencia ("2,015" → 2015).
 
-### Nueva Fuente API (Segunda Entrega)
-- **API Seleccionada**: API pública de Socrata proveída por Datos Abiertos - Colombia (`kgyi-qc7j`).
-- **Data Extraída**: Producto Interno Bruto (PIB) Departamental, proyectado y calculado anualmente por el DANE.
-- **¿Por qué fue elegida?**: Añade un enorme valor analítico. Otorgar dinero es dependiente del contexto económico territorial. El PIB mide la salud financiera, otorgando a los tomadores de decisiones del ICETEX una visión sobre correlaciones en morosidad, dependencia de subsidios estatales o crecimiento.
+### Fuente API — PIB Departamental DANE
+- **API**: Socrata SODA — `https://www.datos.gov.co/resource/kgyi-qc7j.json`
+- **Entidad publicadora**: DANE (Departamento Administrativo Nacional de Estadística).
+- **Filas extraídas**: 5,148 registros (filtro SoQL: `a_o >= '2018'`).
+- **Columnas**: 7 atributos (`a_o`, `departamento`, `actividad`, `sector`, `tipo_de_precios`, `c_digo_departamento_divipola`, `valor_miles_de_millones_de`).
+- **Nulos**: 0.00% en las 7 columnas.
+- **Valores únicos clave**: 33 departamentos, 13 actividades económicas, 3 sectores (Primario/Secundario/Terciario), 2 tipos de precios.
+- **Optimización de tipos**: 3 columnas `object → float32`, 4 columnas `object → category`. Memoria reducida de 2.78 MB → 0.09 MB (−96.8%).
+- **Formato de salida**: Parquet con compresión Snappy (0.04 MB en disco).
+- **¿Por qué fue elegida?**: Comparte dos claves naturales con ICETEX (año y departamento), permitiendo cruzar la demanda de crédito educativo con la fortaleza económica regional medida por el PIB.
 
 ### Estrategia de Integración
 Teníamos dos opciones: cruzar por códigos DIVIPOLA o por nombres en texto.
@@ -118,6 +129,15 @@ Todo este *Suite* (`setup_gx.py` & `validate_data.py`) determina la fiabilidad y
 
 ## 7. Dashboards, Vistas Materializadas y Analítica 
 
-Una vez ingresados los datos, una vista super indexada llamada `mv_impacto_macro_desplazamiento` es recreada mediante Airflow. Encapsula en sí misma Funciones de Ventana (*Window Functions*) puras en PostgreSQL para deducir la métrica interanual sin exigir cómputo masivo al motor de Inteligencia de Negocios.
+La capa analítica se construye sobre la vista materializada `mv_impacto_macro_desplazamiento` (705 filas, granularidad: año × departamento × sector IES). Esta vista encapsula Window Functions de PostgreSQL (`LAG`, `RANK`, `SUM OVER`) para precalcular métricas interanuales sin exigir procesamiento al motor de BI.
 
-*(Nota: Pantallazos pendientes de agregar una vez construidas y validadas las visualizaciones analíticas finales en la conexión en directo de Tableau/Power BI).*
+**Cobertura de datos macro:** El 56.7% de los registros en `fact_credits` (60,952 de 107,534) tienen PIB real asociado (años 2018+). Los registros anteriores a 2018 conservan valores NULL en columnas macro.
+
+El dashboard en Power BI conecta directamente a PostgreSQL (`localhost:5433`) y expone tres visualizaciones principales:
+
+1. **Evolución temporal PIB vs. Beneficiarios**: Gráfico de líneas y barras que superpone el volumen de beneficiarios (barras) contra el PIB departamental promedio (línea). Se observa que la recuperación del PIB post-2020 correlaciona con estabilización en la demanda de créditos.
+2. **Distribución por Sector IES**: Gráfico de área que muestra la cuota de mercado entre universidades oficiales y privadas. El sector PRIVADO concentra consistentemente entre 85%–90% de los créditos otorgados, independientemente del departamento.
+3. **Densidad de Crédito (Scatter)**: Diagrama de dispersión que cruza PIB en el eje X contra volumen de beneficiarios en el eje Y. Los departamentos con bajo PIB se agrupan en el cuadrante inferior-izquierdo con alta demanda relativa de créditos, confirmando el efecto de desplazamiento.
+
+
+![alt text](image.png)
